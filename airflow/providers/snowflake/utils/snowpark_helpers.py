@@ -1,22 +1,28 @@
+#
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 from urllib import parse as parser
 from attr import define, field
 
-try:
-    from astro.files import File
-except: 
-    File = None
-try: 
-    from astro.table import Table, TempTable
-except:
-    Table = None
-    TempTable = None
-try: 
-    from airflow.models.dataset import Dataset
-except: 
-    Dataset = None
+from snowflake.snowpark import DataFrame as Snowpark_DataFrame
+from snowflake.snowpark import Session as SnowparkSession
 
 @define
 class Metadata:
@@ -28,9 +34,6 @@ class SnowparkTable:
     """
     This class allows the Snowpark operators and decorators to create instances of Snowpark Dataframes 
     for any arguments passed to the python callable.
-
-    It is a slim version of the Astro Python SDK Table class.  Therefore users can pass either astro.sql.table.Table or 
-    astronomer.providers.snowflake.SnowparkTable objects as arguments interchangeably. 
     
     """
 
@@ -92,12 +95,15 @@ class SnowparkTable:
             metadata=Metadata(**data["metadata"]),
         )
 
-def _is_table_arg(arg:Any):
-    if ((Table or TempTable) and isinstance(arg, (Table, TempTable))) \
-            or (SnowparkTable and isinstance(arg, SnowparkTable)):
+def _is_table_arg(arg:Any) -> Any:
+    """
+    Checks if a passed function argument is a SnowparkTable object or dict version of a SnowparkTable object.  
+    If so returns a table name or fully-qualified table name.  Otherwise returns False.
+    """
+    if isinstance(arg, SnowparkTable):
         arg=arg.to_json()
 
-    if isinstance(arg, dict) and arg.get("class", "") in ["SnowparkTable", "Table", "TempTable"]:
+    if isinstance(arg, dict) and arg.get("class", "") == "SnowparkTable":
 
         if _try_parse_snowflake_xcom_uri(arg.get('uri', '')):
             return arg['uri']
@@ -117,6 +123,10 @@ def _is_table_arg(arg:Any):
         return False
 
 def _try_parse_snowflake_xcom_uri(value:str) -> Any:
+    """
+    Checks a string to see if it is a URI version (ie. 'snowflake://...') of a SnowparkTable object.
+    If it is a dictionary representing the object is returned.  Otherwise False is returned.
+    """
     try:
         parsed_uri = parser.urlparse(value)
         if parsed_uri.scheme != 'snowflake':
@@ -154,7 +164,11 @@ def _try_parse_snowflake_xcom_uri(value:str) -> Any:
     except:
         return False 
 
-def _deserialize_snowpark_args(arg:Any, snowpark_session:SnowparkSession, conn_params:dict):
+def _deserialize_snowpark_args(arg:Any, snowpark_session:SnowparkSession, conn_params:dict) -> Any:
+    """
+    Deserializes Snowpark DataFrame objects passed as parameters to instantiate DataFrame objects.
+    Iterates over iterable objects to recursively instantiate DataFrames.
+    """
 
     table_name = _is_table_arg(arg)
     uri = _try_parse_snowflake_xcom_uri(arg)
@@ -192,7 +206,10 @@ def _write_snowpark_dataframe(spdf:Snowpark_DataFrame,
                               task_id:str, 
                               run_id:str, 
                               ts_nodash:str, 
-                              multi_index:int):
+                              multi_index:int) -> SnowparkTable:
+    """
+    Serializes Snowpark DataFrame objects returned from the task by creating tables or stage files.
+    """
     try:
         database = temp_data_dict.get('temp_data_db') or snowpark_session.get_current_database().replace("\"","")
         schema = temp_data_dict.get('temp_data_schema') or snowpark_session.get_current_schema().replace("\"","")
@@ -258,9 +275,11 @@ def _serialize_snowpark_results(res:Any,
                                 task_id:str, 
                                 run_id:str, 
                                 ts_nodash:str, 
-                                multi_index:int):
-    
-    from snowflake.snowpark import DataFrame as Snowpark_DataFrame
+                                multi_index:int) -> Any:
+    """
+    Serializes results object returned from a python callable.  Because return types may be 
+    iterable this function recursively iterates through objects.
+    """
 
     if temp_data_dict.get('temp_data_output') in ['stage', 'table']:
         
@@ -306,12 +325,12 @@ def _serialize_snowpark_results(res:Any,
     else:
         return res, multi_index
 
-def _serialize_table_args(arg:Any):
+def _serialize_table_args(arg:Any) -> Any:
     """
-    Recursively serializes Table, TempTable and SnowparkTable objects to json
+    Recursively serializes SnowparkTable objects to json. Because return types may be 
+    iterable this function recursively iterates through objects.
     """
-    if ((Table or TempTable) and isinstance(arg, (Table, TempTable))) \
-            or isinstance(arg, SnowparkTable): 
+    if isinstance(arg, SnowparkTable): 
         return arg.to_json()
             
     elif isinstance(arg, dict):
@@ -333,15 +352,14 @@ def _serialize_table_args(arg:Any):
     else:
         return arg
 
-def _deserialize_snowpark_tables(arg:Any):
+def _deserialize_snowpark_tables(arg:Any) -> Any:
+    """
+    Recursive function to deserialize any SnowparkTable objects passed as arguments.
+    """
             
     if isinstance(arg, dict):
         if arg.get("class", "") == "SnowparkTable":
             return SnowparkTable.from_json(arg)
-        elif Table and arg.get("class", "") == "Table":
-            return Table.from_json(arg)
-        elif TempTable and arg.get("class", "") == "TempTable":
-            return TempTable.from_json(arg)
         else:
             tmp = {}
             for k, v in arg.items():

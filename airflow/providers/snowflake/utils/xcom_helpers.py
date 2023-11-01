@@ -1,3 +1,20 @@
+#
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
 from __future__ import annotations
 
 from urllib import parse as parser
@@ -6,46 +23,12 @@ from typing import TYPE_CHECKING, Any
 
 from airflow.exceptions import AirflowException
 from airflow.providers.snowflake.hooks.snowflake import SnowflakeHook
-
-def _try_parse_snowflake_xcom_uri(value:str) -> Any:
-    try:
-        parsed_uri = parser.urlparse(value)
-        if parsed_uri.scheme != 'snowflake':
-            return False
-
-        netloc = parsed_uri.netloc
-
-        if len(netloc.split('.')) == 2:
-            account, region = netloc.split('.')
-        else:
-            account = netloc
-            region = None           
-    
-        uri_query = parsed_uri.query.split('&')
-
-        if uri_query[1].split('=')[0] == 'table':
-            xcom_table = uri_query[1].split('=')[1]
-            xcom_stage = None
-        elif uri_query[1].split('=')[0] == 'stage':
-            xcom_stage = uri_query[1].split('=')[1]
-            xcom_table = None
-        else:
-            return False
-        
-        xcom_key = uri_query[2].split('=')[1]
-
-        return {
-            'account': account,
-            'region': region,
-            'xcom_table': xcom_table, 
-            'xcom_stage': xcom_stage,
-            'xcom_key': xcom_key,
-        }
-
-    except:
-        return False 
+from airflow.providers.snowflake.utils import _try_parse_snowflake_xcom_uri
 
 def get_snowflake_xcom_objects() -> dict:
+    """
+    Checks necessary environment variables for necessary settings and returns a dict.
+    """
     try: 
         snowflake_conn_id = os.environ['AIRFLOW__CORE__XCOM_SNOWFLAKE_CONN_NAME']
     except:
@@ -67,14 +50,19 @@ def get_snowflake_xcom_objects() -> dict:
 
     return {'conn_id': snowflake_conn_id, 'table': snowflake_xcom_table, 'stage': snowflake_xcom_stage}
 
-def check_xcom_conn(snowflake_conn_id:str) -> str:
+def check_xcom_conn(snowflake_conn_id:str) -> bool:
+    """Make sure we can connect to Snowflake before trying to push xcoms."""
     
     response = SnowflakeHook(snowflake_conn_id=snowflake_conn_id).test_connection()
-    assert response[0] == True, f"Snowflake XCOM connection {snowflake_conn_id} error. {response[1]}"
+    if response[0] != True:
+        raise AirflowException(f"Snowflake XCOM connection {snowflake_conn_id} error. {response[1]}")
     
     return True
 
-def check_xcom_table(snowflake_conn_id:str, snowflake_xcom_table:str) -> str:
+def check_xcom_table(snowflake_conn_id:str, snowflake_xcom_table:str) -> bool:
+    """
+    Checks the schema of the XCOM table against expected schema and returns True or raises an exception.
+    """
     expected_schema = [
         ('DAG_ID', 'VARCHAR(16777216)', 'COLUMN', 'N', None, 'N', 'N', None, None, None, None), 
         ('TASK_ID', 'VARCHAR(16777216)', 'COLUMN', 'N', None, 'N', 'N', None, None, None, None), 
@@ -87,8 +75,8 @@ def check_xcom_table(snowflake_conn_id:str, snowflake_xcom_table:str) -> str:
 
     xcom_table_schema = SnowflakeHook(snowflake_conn_id=snowflake_conn_id).get_records(f'DESCRIBE TABLE {snowflake_xcom_table}')
 
-    assert xcom_table_schema == expected_schema, \
-        f"""
+    if xcom_table_schema != expected_schema:
+        raise AirflowException(f"""
                 XCOM table {snowflake_xcom_table} does not have the correct schema. 
                 Please create it with:
 
@@ -102,10 +90,13 @@ def check_xcom_table(snowflake_conn_id:str, snowflake_xcom_table:str) -> str:
                         value_type varchar NOT NULL,
                         value varchar NOT NULL
                     )\'\'\')
-                """
+                """)
     return True
 
-def check_xcom_stage(snowflake_conn_id:str, snowflake_xcom_stage:str) -> str:
+def check_xcom_stage(snowflake_conn_id:str, snowflake_xcom_stage:str) -> bool:
+    """
+    Check if XCOM stage is accessible and returns True or raises and exception.
+    """
     
     try:
         SnowflakeHook(snowflake_conn_id=snowflake_conn_id).get_records(f'DESCRIBE STAGE {snowflake_xcom_stage}')
@@ -124,7 +115,11 @@ def check_xcom_stage(snowflake_conn_id:str, snowflake_xcom_stage:str) -> str:
         
     return True
 
-def check_xcom_backend():
+def check_xcom_backend() -> bool:
+    """
+    Checks all XCOM backend components before attempting to push XCOMs and returns
+    True or raises an exception.
+    """
 
     snowflake_xcom_objects = get_snowflake_xcom_objects()
     

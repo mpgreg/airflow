@@ -1,3 +1,20 @@
+#
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
 from __future__ import annotations
 
 from typing import Callable, Sequence
@@ -7,11 +24,10 @@ from textwrap import dedent
 from airflow.decorators.base import DecoratedOperator, TaskDecorator, task_decorator_factory
 from airflow.utils.decorators import remove_task_decorator
 
-from astronomer.providers.snowflake.operators.snowpark import (
+from airflow.providers.snowflake.operators.snowpark import (
     SnowparkVirtualenvOperator, 
     SnowparkExternalPythonOperator,
-    SnowparkPythonOperator,
-    SnowparkContainersPythonOperator
+    SnowparkPythonOperator
 )
 
 class _SnowparkPythonDecoratedOperator(DecoratedOperator, SnowparkPythonOperator):
@@ -485,118 +501,3 @@ def snowpark_ext_python_task(
         **kwargs,
     )
 
-
-class SnowparkContainersPythonDecoratedOperator(DecoratedOperator, SnowparkContainersPythonOperator):
-    """
-    Wraps a Python callable and captures args/kwargs when called for execution.
-
-    """
-
-    template_fields: Sequence[str] = ("op_args", "op_kwargs")
-    template_fields_renderers = {"op_args": "py", "op_kwargs": "py"}
-
-    shallow_copy_attrs: Sequence[str] = ("python_callable",)
-
-    custom_operator_name: str = "@task.snowpark_containers_python"
-
-    def __init__(self, 
-                 *, 
-                 python_callable, 
-                 op_args, 
-                 op_kwargs, 
-                 **kwargs) -> None:
-        
-        self.doc_md = python_callable.__doc__
-        
-        kwargs_to_upstream = {
-            "python_callable": python_callable,
-            "op_args": op_args,
-            "op_kwargs": op_kwargs,
-        }
-        super().__init__(
-            kwargs_to_upstream=kwargs_to_upstream,
-            python_callable=python_callable,
-            op_args=op_args,
-            op_kwargs=op_kwargs,
-            **kwargs,
-        )
-
-    def get_python_source(self):
-        raw_source = inspect.getsource(self.python_callable)
-        res = dedent(raw_source)
-        res = remove_task_decorator(res, self.custom_operator_name)
-        return res
-
-
-def snowpark_containers_python_task(
-    multiple_outputs: bool = False,
-    **kwargs,
-) -> TaskDecorator:
-    """Wraps a python callable into an Airflow operator to run via a Snowpark Container runner service.
-
-    Accepts kwargs for operator kwarg. Can be reused in a single DAG.
-
-    This function is only used during type checking or auto-completion.
-
-    :meta private:
-    
-    :param snowflake_conn_id: connection to use when running code within the Snowpark Container runner service.
-    :type snowflake_conn_id: str  (default is snowflake_default)
-    :param runner_service_name: Name of Airflow runner service in Snowpark Container services.  Must specify 
-    runner_service_name or runner_endpoint
-    :type runner_service_name: str
-    :param runner_endpoint: Endpoint URL of the instantiated Snowpark Container runner.  Must specify 
-    runner_endpoint or runner_service_name.
-    :type runner_endpoint: str
-    :param runner_headers: Optional OAUTH bearer token for Snowpark Container runner.  If runner_service_name is 
-    specified SnowparkContainersHook() will be used to pull the token just before running the task.
-    :type runner_headers: str
-    :param python_callable: Function to decorate
-    :type python_callable: Callable 
-    :param python_version: Python version (ie. '<maj>.<min>').  Callable will run in a PythonVirtualenvOperator on the runner.  
-        If not set will use default python version on runner.
-    :type python_version: str:
-    :param log_level: Set log level for Snowflake logging.  Default: 'ERROR'
-    :type log_level: str
-    :param temp_data_output: If set to 'stage' or 'table' Snowpark DataFrame objects returned
-        from the operator will be serialized to the stage specified by 'temp_data_stage' or
-        a table with prefix 'temp_data_table_prefix'.
-    :type temp_data_output: str
-    :param temp_data_db: The database to be used in serializing temporary Snowpark DataFrames. If
-        not set the operator will use the database set at the operator or hook level.  If None, 
-        the operator will assume a default database is set in the Snowflake user preferences.
-    :type temp_data_db: str
-    :param temp_data_schema: The schema to be used in serializing temporary Snowpark DataFrames. If
-        not set the operator will use the schema set at the operator or hook level.  If None, 
-        the operator will assume a default schema is set in the Snowflake user preferences.
-    :type temp_data_schema: str
-    :param temp_data_stage: The stage to be used in serializing temporary Snowpark DataFrames. This
-        must be set if temp_data_output == 'stage'.  Output location will be named for the task:
-        <DATABASE>.<SCHEMA>.<STAGE>/<DAG_ID>/<TASK_ID>/<RUN_ID>
-        
-        and a uri will be returned to Airflow xcom:
-        
-        snowflake://<ACCOUNT>.<REGION>?&stage=<FQ_STAGE>&key=<DAG_ID>/<TASK_ID>/<RUN_ID>/0/return_value.parquet'
-    :type temp_data_stage: str
-    :param temp_data_table_prefix: The prefix name to use for serialized Snowpark DataFrames. This
-        must be set if temp_data_output == 'table'. Default: "XCOM_"
-
-        Output table will be named for the task:
-        <DATABASE>.<SCHEMA>.<PREFIX><DAG_ID>__<TASK_ID>__<TS_NODASH>_INDEX
-
-        and the return value set to a SnowparkTable object with the fully-qualified table name.
-        
-        SnowparkTable(name=<DATABASE>.<SCHEMA>.<PREFIX><DAG_ID>__<TASK_ID>__<TS_NODASH>_INDEX)
-    :type temp_data_table_prefix: str
-    :param temp_data_overwrite: Whether to overwrite existing temp data or error.
-    :type temp_data_overwrite: bool
-    :param multiple_outputs: If set to True, the decorated function's return value will be unrolled to
-        multiple XCom values. Dict will unroll to XCom values with its keys as XCom keys.
-        Defaults to False.
-    :type multiple_outputs: bool
-    """
-    return task_decorator_factory(
-        multiple_outputs=multiple_outputs,
-        decorated_operator_class=SnowparkContainersPythonDecoratedOperator,
-        **kwargs,
-    )

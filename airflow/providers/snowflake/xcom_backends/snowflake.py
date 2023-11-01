@@ -1,3 +1,20 @@
+#
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
 from __future__ import annotations
 
 import tempfile
@@ -16,18 +33,10 @@ if TYPE_CHECKING:
 
 from airflow.exceptions import AirflowException
 from airflow.providers.snowflake.hooks.snowflake import SnowflakeHook
-from astronomer.providers.snowflake.utils.snowpark_helpers import SnowparkTable
-from astronomer.providers.snowflake.utils.xcom_helpers import _try_parse_snowflake_xcom_uri, get_snowflake_xcom_objects
-
-try:
-    from astro.files import File
-except: 
-    File = None
-try: 
-    from astro.table import Table, TempTable
-except:
-    Table = None
-    TempTable = None
+from airflow.providers.snowflake.utils.snowpark_helpers import SnowparkTable
+from airflow.providers.snowflake.utils.xcom_helpers import get_snowflake_xcom_objects
+from airflow.providers.snowflake.utils.snowpark_helpers import _try_parse_snowflake_xcom_uri
+    
 try: 
     from airflow.models.dataset import Dataset
 except: 
@@ -47,10 +56,15 @@ def _write_to_snowflake(
     dag_id: str, 
     task_id: str, 
     run_id: str,
-):
-
+) -> Any:
+    """
+    Writes task results to Snowflake tables or stages.  Small JSON serializable objects are 
+    written to a XCOM table with similar schema to Airflow XCOM. Non-serializable or large 
+    objects are written to an XCOM stage.
+    """
+    
     #Other downstream systems such as Snowpark operators may have serialized to 
-    # Snowflake already. Check for a valid xcom URI in return value and pass it through.
+    #Snowflake already. Check for a valid xcom URI in return value and pass it through.
     if _try_parse_snowflake_xcom_uri(value):
         return value
     elif Dataset and isinstance(value, Dataset):
@@ -147,12 +161,13 @@ def _write_to_snowflake(
 
     return uri
     
-def _serialize_table_values(value:Any):
+def _serialize_table_values(value:Any) -> Any:
+    """
+    Returns serializable versions of SnowparkTable objects by recursing through potentially 
+    iterable task return objects. 
+    """
 
-    if any((isinstance(value, SnowparkTable), 
-            (File and isinstance(value, File)), 
-            (Table and isinstance(value, Table)), 
-            (TempTable and isinstance(value, TempTable)))):
+    if isinstance(value, SnowparkTable):
         return value.to_json()
     
     if isinstance(value, dict):
@@ -165,6 +180,9 @@ def _serialize_table_values(value:Any):
         return value
 
 def _read_from_snowflake(parsed_uri: str, hook:SnowflakeHook, snowflake_xcom_objects:dict) -> Any:
+        """
+        Reads objects from Snowflake XCOM tables and stages in order to deserialize to tasks.
+        """
 
         if parsed_uri['xcom_stage']:
 
